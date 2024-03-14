@@ -84,9 +84,9 @@
     </issueManagement>
 
     <scm>
-        <connection>scm:git:git@github.com:smallrye/smallrye-graphql.git</connection>
-        <developerConnection>scm:git:git@github.com:smallrye/smallrye-graphql.git</developerConnection>
-        <url>https://github.com/smallrye/smallrye-graphql/</url>
+        <connection>scm:git:git@github.com:rubik-cube-man/smallrye-graphql.git</connection>
+        <developerConnection>scm:git:git@github.com:rubik-cube-man/smallrye-graphql.git</developerConnection>
+        <url>https://github.com/rubik-cube-man/smallrye-graphql/</url>
         <tag>HEAD</tag>
     </scm>
 
@@ -595,4 +595,12 @@
             </modules>
         </profile>
     </profiles>
+
+    <distributionManagement>
+        <snapshotRepository>
+            <id>github</id>
+            <name>GitHub Packages</name>
+            <url>https://maven.pkg.github.com/rubik-cube-man/smallrye-graphql</url>
+        </snapshotRepository>
+    </distributionManagement>
 </project>

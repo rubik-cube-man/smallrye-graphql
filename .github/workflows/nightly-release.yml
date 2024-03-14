@@ -1,0 +1,35 @@
+name: Nightly Release
+
+on:
+  push: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    name: release
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: everlytic/branch-merge@1.1.2
+        with:
+          github_token: ${{ github.token }}
+          source_ref: 'master'
+          target_branch: ${{ github.ref }}
+          commit_message_template: '[Automated] Merged {source_ref} into target {target_branch}'
+
+      - name: Set up Java for publishing to GitHub Packages
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Get settings
+        run: cat /home/runner/.m2/settings.xml
+
+      - name: Publish to GitHub Packages
+        run: mvn --batch-mode deploy
