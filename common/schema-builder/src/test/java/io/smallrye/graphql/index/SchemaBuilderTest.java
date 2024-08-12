@@ -118,18 +118,79 @@ public class SchemaBuilderTest {
      * Test a schema where two Java classes map to the same GraphQL type. Such schema should not be allowed to create.
      */
     @Test
-    public void testSchemaWithDuplicates() {
+    public void testSchemaWithTypeNameDuplicates() {
         try {
             Indexer indexer = new Indexer();
-            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates");
-            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/a");
-            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/b");
+            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/typename");
+            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/typename/a");
+            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/typename/b");
             IndexView index = indexer.complete();
             SchemaBuilder.build(index);
             Assertions.fail("Schema should not build when there are multiple classes mapped to the same type");
         } catch (SchemaBuilderException e) {
             // ok
+            assertEquals("Classes io.smallrye.graphql.index.duplicates.typename.a.Animal " +
+                    "and io.smallrye.graphql.index.duplicates.typename.b.Animal map to the same GraphQL type " +
+                    "'Animal', consider using the @Name annotation or a different naming strategy to " +
+                    "distinguish between them",
+                    e.getMessage());
         }
+    }
+
+    @Test
+    public void testSchemaWithSourceFieldNameDuplicates() {
+        try {
+            Indexer indexer = new Indexer();
+            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/source");
+            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/source/sourcefield");
+            IndexView index = indexer.complete();
+            SchemaBuilder.build(index);
+            Assertions.fail("Schema should not build when there are both field and source field with the same defined name");
+        } catch (SchemaBuilderException e) {
+            // ok
+            assertEquals("Type 'SomeClass' already contains field named 'password' so source field, " +
+                    "with the same name, cannot be applied. You can resolve this conflict using @Ignore on the type's field.",
+                    e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSchemaWithBatchSourceFieldNameDuplicates() {
+        try {
+            Indexer indexer = new Indexer();
+            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/source");
+            indexDirectory(indexer, "io/smallrye/graphql/index/duplicates/source/batch");
+            IndexView index = indexer.complete();
+            SchemaBuilder.build(index);
+            Assertions.fail("Schema should not build when there are both field and source field with the same defined name");
+        } catch (SchemaBuilderException e) {
+            // ok
+            assertEquals(
+                    "Type 'SomeClass' already contains field named 'password' so source field, with the same name, cannot be applied. You can resolve this conflict using @Ignore on the type's field.",
+                    e.getMessage());
+        }
+    }
+
+    @Test
+    public void testSchemaWithInheritFieldBySubtype() {
+        Indexer indexer = new Indexer();
+        indexDirectory(indexer, "io/smallrye/graphql/index/inherit/");
+
+        IndexView index = indexer.complete();
+        Schema schema = SchemaBuilder.build(index);
+        // Get Types
+        Map<String, Type> types = schema.getTypes();
+        Map<String, Type> interfaces = schema.getInterfaces();
+        Type containerType = types.get("ContainerType");
+        Field containerTypeField = containerType.getFields().get("inheritField");
+        Type containerInterface = interfaces.get("ContainerInterface");
+        Field containerInterfaceField = containerInterface.getFields().get("inheritField");
+
+        // Should be FieldType according to GraphQL Spec: https://spec.graphql.org/October2021/#sec-Objects.Type-Validation
+        assertEquals("io.smallrye.graphql.index.inherit.FieldType",
+                containerTypeField.getReference().getClassName());
+        assertEquals("io.smallrye.graphql.index.inherit.FieldInterface",
+                containerInterfaceField.getReference().getClassName());
     }
 
     @Test
@@ -155,7 +216,8 @@ public class SchemaBuilderTest {
         assertEquals("someDirective", someDirective.getName());
         assertEquals(SomeDirective.class.getName(), someDirective.getClassName());
         assertEquals(singleton("value"), someDirective.argumentNames());
-        assertEquals(new HashSet<>(asList("INTERFACE", "FIELD_DEFINITION", "OBJECT")), someDirective.getLocations());
+        assertEquals(new HashSet<>(asList("INTERFACE", "FIELD_DEFINITION", "OBJECT", "INPUT_OBJECT", "INPUT_FIELD_DEFINITION")),
+                someDirective.getLocations());
 
         // check directive instances on type
         Type movie = schema.getTypes().get("Movie");

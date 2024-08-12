@@ -96,8 +96,8 @@ jobs:
       - name: checkout Quarkus repository
         uses: actions/checkout@v2
         with:
-          repository: quarkusio/quarkus
-          ref: main
+          repository: mskacelik/quarkus
+          ref: srgql-2.9.1
           path: quarkus
 
       - uses: actions/setup-java@v3.10.0
@@ -120,7 +120,7 @@ jobs:
           cd quarkus && \
           mvn install -Dsmallrye-graphql.version=$SMALLRYE_VERSION -Dquickly && \
           mvn verify -Dsmallrye-graphql.version=$SMALLRYE_VERSION -Dnative \
-            -pl extensions/smallrye-graphql-client/deployment,extensions/smallrye-graphql-client/runtime,extensions/smallrye-graphql/deployment,extensions/smallrye-graphql/runtime,integration-tests/smallrye-graphql,integration-tests/smallrye-graphql-client,integration-tests/hibernate-orm-graphql-panache,extensions/oidc-client-graphql/deployment,extensions/oidc-client-graphql/runtime
+            -pl extensions/smallrye-graphql-client/deployment,extensions/smallrye-graphql-client/runtime,extensions/smallrye-graphql/deployment,extensions/smallrye-graphql/runtime,integration-tests/smallrye-graphql,integration-tests/smallrye-graphql-client,integration-tests/hibernate-orm-graphql-panache,extensions/oidc-client-graphql/deployment,extensions/oidc-client-graphql/runtime,tcks/microprofile-graphql -Ptcks
 
   quality:
     needs: [build]

@@ -512,7 +512,6 @@ public class Annotations {
 
     private static Map<DotName, AnnotationInstance> getAnnotations(org.jboss.jandex.Type type) {
         Map<DotName, AnnotationInstance> annotationMap = new HashMap<>();
-
         if (type.kind().equals(org.jboss.jandex.Type.Kind.PARAMETERIZED_TYPE)) {
             org.jboss.jandex.Type typeInCollection = type.asParameterizedType().arguments().get(0);
             annotationMap.putAll(getAnnotations(typeInCollection));
@@ -522,7 +521,6 @@ public class Annotations {
                 annotationMap.put(annotationInstance.name(), annotationInstance);
             }
         }
-
         return annotationMap;
     }
 
