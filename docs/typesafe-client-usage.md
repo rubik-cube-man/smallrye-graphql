@@ -1,9 +1,10 @@
+#  Java code-first type-safe GraphQL Client API
+
 A Java code-first type-safe GraphQL Client API suggestion for
 [Microprofile GraphQL Issue
 \#185](https://github.com/eclipse/microprofile-graphql/issues/185).
 
-Basic Usage
-===========
+## Basic Usage
       
 Creating the client-side counterpart of the GraphQL API:
 
@@ -36,18 +37,17 @@ support, you need to instantiate the API interface by using the builder:
 SuperHeroesApi api = TypesafeGraphQLClientBuilder.newBuilder().build(SuperHeroesApi.class);
 ```
 
-The basic idea of the Java code-first approach is that you start by
+The basic idea of the Java code-first approach is to start by
 writing the DTOs and query/mutation methods as you need them in your
 client. This ensures that you don’t request fields that you don’t need;
 the thinking is inspired by [Consumer Driven
 Contracts](https://martinfowler.com/articles/consumerDrivenContracts.html).
 
 
-If the server uses names different from yours, you can simply use
-annotations to do a mapping:
+If the server uses names different from yours, you can use annotations to do a mapping:
 
-Name Mapping / Aliases
-======================
+
+### Name Mapping / Aliases
 
 If the server defines a different field or parameter name, annotate it
 with `@Name`. If the server defines a different query name, annotate the
@@ -75,8 +75,7 @@ If you rename a field or method, the real field or method name will be
 used as an alias, so you can select the same data twice (see `` and ``
 below).
 
-Configuration
-=============
+### Configuration
 
 If the endpoint is always the same, e.g. a public API of a cloud
 service, you can add the URL to your API annotation, e.g.:
@@ -102,7 +101,7 @@ test system. Simply use [MicroProfile
 Config](https://download.eclipse.org/microprofile/microprofile-config-1.4/microprofile-config-spec.html)
 to set the endpoint; similar to the [MicroProfile Rest
 Client](https://download.eclipse.org/microprofile/microprofile-rest-client-1.4.1/microprofile-rest-client-1.4.1.html),
-the key for the endpoint is the fully qualified name of the api
+the key for the endpoint is the fully qualified name of the API
 interface, plus `/mp-graphql/url`, e.g.:
 
 ``` properties
@@ -116,8 +115,7 @@ key for the endpoint `superheroes/mp-graphql/url`.
 When using the builder, you can override the config key as well:
 `TypesafeGraphQLClientBuilder.newBuilder().configKey("superheroes")`.
 
-NestedParameter
-===============
+### NestedParameter
 
 Some APIs require parameters beyond the root level, e.g. for filtering
 or paginating nested lists. Say you have a schema like this:
@@ -145,3 +143,135 @@ interface TeamsApi {
 The value of the `@NestedParameter` annotation is the dot-delimited path
 to the nested field/method that the value should be added to.
 
+Example of server code
+```java
+@GraphQLApi
+public class RoleApi {
+    @Query
+    public List<Role> findAllRolesByUserId(@NonNull UUID userId) {
+        // return roles
+    }
+
+    public List<Permission> permission(@Source Roles role, @DefaultValue("5") int limit) {
+        // return permissions, based on roles
+    }
+
+    public List<PermissionType> permissionType(@Source Permission permission, @DefaultValue("5") int limit) {
+        // return permissionType, based on permission
+    }
+}
+```
+
+Query looks like
+```
+query {
+  findAllRolesByUserId(userId: ...) {
+    id
+    permission(limit: 2) {
+      id
+      permissionType(limit: 3) {
+        id
+      }
+    }
+  }
+}
+```
+
+On the client side, you can declare the following code:
+```java
+public record PermissionType(Long id) {
+}
+
+public record Permission(Long id, List<PermissionType> permissionType) {
+}
+
+public record Role(UUID id, List<Permission> permission) {
+}
+
+@GraphQLClientApi
+public interface ApiClient {
+    List<Role> findAllRolesByUserId(
+            UUID userId,
+            @NestedParameter("permission") @Name("limit") int permissionLimit,
+            @NestedParameter("permission.permissionType") @Name("limit") int permissionTypeLimit
+    );
+}
+```
+
+## Namespaces
+
+There are several ways to work with namespaces in a type-safe client:
+1. Using `@Namespace`
+2. Using `@Name` (deprecated)
+
+> [NOTE] You can only use one of the annotations - `@Name` or `@Namespace` on a `GraphClientQLApi` interface.
+
+### Using @Namespace annotation
+
+The `@Namespace` annotation accepts an array of strings specifying the nesting levels of the namespace.
+This flexible approach allows you to create namespaces with any desired level of nesting, combining different levels as needed.
+
+If the remote GraphQL API has the following schema:
+```
+"Query root"
+type Query {
+  admin: AdminQuery
+}
+
+type AdminQuery {
+  users: AdminUsersQuery
+}
+
+type AdminUsersQuery {
+  findAll: User
+}
+
+type User {
+  id: BigInteger
+  [...]
+}
+```
+
+While declaring the following interface:
+```java
+@Namespace({"admin", "users"})
+@GraphQLClientApi
+public interface UsersClient {
+    List<User> findAll();
+}
+```
+
+Its outcome will be the following GraphQL query:
+```
+query AminUsersFindAll {
+  admin {
+    users {
+      findAll {
+        id
+      }
+    }
+  }
+}
+```
+
+### Using @Name (deprecated)
+> [NOTE] This feature may be removed in the future.
+
+The `@Name` annotation functions similarly to `@Namespace`, but it is limited to a single nesting level.
+```
+query {
+    users {
+        findAll {
+         ...
+        }
+    }
+}
+```
+
+```java
+@Name("users")
+@GraphQLClientApi
+public interface ApiClient {
+    List<User> findAll();
+}
+```

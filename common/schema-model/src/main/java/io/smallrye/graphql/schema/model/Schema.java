@@ -2,11 +2,13 @@ package io.smallrye.graphql.schema.model;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Represents a GraphQL Schema.
@@ -21,10 +23,10 @@ public final class Schema implements Serializable {
     private Set<Operation> queries = new HashSet<>();
     private Set<Operation> mutations = new HashSet<>();
     private Set<Operation> subscriptions = new HashSet<>();
+    private Set<Operation> resolvers = new HashSet<>();
 
-    private Map<Group, Set<Operation>> groupedQueries = new HashMap<>();
-    private Map<Group, Set<Operation>> groupedMutations = new HashMap<>();
-    private Map<Group, Set<Operation>> groupedSubscriptions = new HashMap<>();
+    private Map<String, NamespaceContainer> namespacedQueries = new HashMap<>();
+    private Map<String, NamespaceContainer> namespacedMutations = new HashMap<>();
 
     private List<CustomScalarType> customScalarTypes = new ArrayList<>();
     private List<DirectiveType> directiveTypes = new ArrayList<>();
@@ -43,6 +45,46 @@ public final class Schema implements Serializable {
     public Schema() {
     }
 
+    public Map<String, NamespaceContainer> getNamespacedQueries() {
+        return namespacedQueries;
+    }
+
+    public void setNamespacedQueries(Map<String, NamespaceContainer> namespacedQueries) {
+        this.namespacedQueries = namespacedQueries;
+    }
+
+    public Map<String, NamespaceContainer> getNamespacedMutations() {
+        return namespacedMutations;
+    }
+
+    public Set<Operation> getAllOperations() {
+        Set<Operation> operations = new HashSet<>();
+        operations.addAll(queries);
+        operations.addAll(mutations);
+        operations.addAll(subscriptions);
+        operations.addAll(getAllNamespacedQueryOperations());
+        operations.addAll(getAllNamespacedMutationOperations());
+        return operations;
+    }
+
+    public Set<Operation> getAllNamespacedQueryOperations() {
+        return namespacedQueries.values().stream()
+                .map(NamespaceContainer::getAllOperations)
+                .flatMap(Collection::stream)
+                .collect(Collectors.toSet());
+    }
+
+    public Set<Operation> getAllNamespacedMutationOperations() {
+        return namespacedMutations.values().stream()
+                .map(NamespaceContainer::getAllOperations)
+                .flatMap(Collection::stream)
+                .collect(Collectors.toSet());
+    }
+
+    public void setNamespacedMutations(Map<String, NamespaceContainer> namespacedMutations) {
+        this.namespacedMutations = namespacedMutations;
+    }
+
     public Set<Operation> getQueries() {
         return queries;
     }
@@ -56,7 +98,9 @@ public final class Schema implements Serializable {
     }
 
     public boolean hasOperations() {
-        return hasQueries() || hasGroupedQueries() || hasMutations() || hasGroupedMutations();
+        return hasQueries() || hasNamespaceQueries()
+                || hasMutations() || hasNamespaceMutations()
+                || hasSubscriptions() || hasResolvers();
     }
 
     public boolean hasQueries() {
@@ -95,52 +139,20 @@ public final class Schema implements Serializable {
         return !this.subscriptions.isEmpty();
     }
 
-    public Map<Group, Set<Operation>> getGroupedQueries() {
-        return groupedQueries;
+    public Set<Operation> getResolvers() {
+        return resolvers;
     }
 
-    public void setGroupedQueries(Map<Group, Set<Operation>> groupedQueries) {
-        this.groupedQueries = groupedQueries;
+    public void setResolvers(Set<Operation> resolvers) {
+        this.resolvers = resolvers;
     }
 
-    public void addGroupedQuery(Group group, Operation query) {
-        addToOperationMap(this.groupedQueries, group, query);
+    public void addResolver(Operation resolver) {
+        this.resolvers.add(resolver);
     }
 
-    public boolean hasGroupedQueries() {
-        return !this.groupedQueries.isEmpty();
-    }
-
-    public Map<Group, Set<Operation>> getGroupedMutations() {
-        return groupedMutations;
-    }
-
-    public void setGroupedMutations(Map<Group, Set<Operation>> groupedMutations) {
-        this.groupedMutations = groupedMutations;
-    }
-
-    public void addGroupedMutation(Group group, Operation mutation) {
-        addToOperationMap(this.groupedMutations, group, mutation);
-    }
-
-    public boolean hasGroupedMutations() {
-        return !this.groupedMutations.isEmpty();
-    }
-
-    public Map<Group, Set<Operation>> getGroupedSubscriptions() {
-        return groupedSubscriptions;
-    }
-
-    public void setGroupedSubscriptions(Map<Group, Set<Operation>> groupedSubscriptions) {
-        this.groupedSubscriptions = groupedSubscriptions;
-    }
-
-    public void addGroupedSubscription(Group group, Operation subscription) {
-        addToOperationMap(this.groupedSubscriptions, group, subscription);
-    }
-
-    public boolean hasGroupedSubscriptions() {
-        return !this.groupedSubscriptions.isEmpty();
+    public boolean hasResolvers() {
+        return !this.resolvers.isEmpty();
     }
 
     public Map<String, InputType> getInputs() {
@@ -309,18 +321,6 @@ public final class Schema implements Serializable {
         return batchOperations;
     }
 
-    private void addToOperationMap(Map<Group, Set<Operation>> map, Group group, Operation query) {
-        Set<Operation> set;
-
-        if (map.containsKey(group)) {
-            set = map.get(group);
-        } else {
-            set = new HashSet<>();
-        }
-        set.add(query);
-        map.put(group, set);
-    }
-
     public void addCustomScalarType(CustomScalarType customScalarType) {
         customScalarTypes.add(customScalarType);
         Scalars.registerCustomScalarInSchema(
@@ -359,9 +359,9 @@ public final class Schema implements Serializable {
                 ", queries=" + queries +
                 ", mutations=" + mutations +
                 ", subscriptions=" + subscriptions +
-                ", groupedQueries=" + groupedQueries +
-                ", groupedMutations=" + groupedMutations +
-                ", groupedSubscriptions=" + groupedSubscriptions +
+                ", resolvers=" + resolvers +
+                ", namespacedQueries=" + namespacedQueries +
+                ", namespacedMutations=" + namespacedMutations +
                 ", directiveTypes=" + directiveTypes +
                 ", customScalarTypes=" + customScalarTypes +
                 ", inputs=" + inputs +
@@ -388,5 +388,27 @@ public final class Schema implements Serializable {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public void addNamespacedQuery(Namespace namespace, Operation operation) {
+        NamespaceContainer groupContainer = namespacedQueries.computeIfAbsent(
+                namespace.getNames().get(0),
+                key -> new NamespaceContainer());
+        groupContainer.add(namespace.getNames(), namespace.getDescription(), operation);
+    }
+
+    public void addNamespacedMutation(Namespace namespace, Operation operation) {
+        NamespaceContainer groupContainer = namespacedMutations.computeIfAbsent(
+                namespace.getNames().get(0),
+                key -> new NamespaceContainer());
+        groupContainer.add(namespace.getNames(), namespace.getDescription(), operation);
+    }
+
+    public boolean hasNamespaceQueries() {
+        return namespacedQueries.values().stream().anyMatch(NamespaceContainer::hasOperations);
+    }
+
+    public boolean hasNamespaceMutations() {
+        return namespacedMutations.values().stream().anyMatch(NamespaceContainer::hasOperations);
     }
 }

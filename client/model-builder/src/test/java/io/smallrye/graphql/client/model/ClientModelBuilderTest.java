@@ -11,10 +11,12 @@ import java.util.List;
 import java.util.Set;
 
 import org.eclipse.microprofile.graphql.Mutation;
+import org.eclipse.microprofile.graphql.Name;
 import org.eclipse.microprofile.graphql.Query;
 import org.jboss.jandex.Index;
 import org.junit.jupiter.api.Test;
 
+import io.smallrye.graphql.api.Namespace;
 import io.smallrye.graphql.api.Subscription;
 import io.smallrye.graphql.client.typesafe.api.GraphQLClientApi;
 
@@ -208,6 +210,66 @@ public class ClientModelBuilderTest {
         assertOperation(clientModel,
                 new MethodKey("allStrings0", new Class[0]),
                 "query allStrings0 { allStrings0 }");
+    }
+
+    @Name("named")
+    @GraphQLClientApi(configKey = "string-api")
+    interface NamedClientApi {
+        @Query("findAll")
+        List<String> findAllStringsQuery();
+
+        @Name("findAll")
+        List<String> findAllStringsName();
+
+        @Mutation("update")
+        @Name("update")
+        String update(String s);
+    }
+
+    @Test
+    void namedClientModelTest() throws IOException {
+        String configKey = "string-api";
+        ClientModels clientModels = ClientModelBuilder
+                .build(Index.of(NamedClientApi.class));
+        assertNotNull(clientModels.getClientModelByConfigKey(configKey));
+        ClientModel clientModel = clientModels.getClientModelByConfigKey(configKey);
+        assertEquals(3, clientModel.getOperationMap().size());
+        assertOperation(clientModel,
+                new MethodKey("findAllStringsQuery", new Class[0]),
+                "query NamedFindAll { named { findAll } }");
+        assertOperation(clientModel,
+                new MethodKey("findAllStringsName", new Class[0]),
+                "query NamedFindAll { named { findAll } }");
+        assertOperation(clientModel,
+                new MethodKey("update", new Class[] { String.class }),
+                "mutation NamedUpdate($s: String) { named { update(s: $s) } }");
+    }
+
+    @Namespace({ "first", "second" })
+    @GraphQLClientApi(configKey = "namespaced-string-api")
+    interface NamespacedClientApi {
+        @Query("findAll")
+        List<String> findAllStringsQuery();
+
+        @Mutation("update")
+        @Name("update")
+        String update(String s);
+    }
+
+    @Test
+    void namespacedClientModelTest() throws IOException {
+        String configKey = "namespaced-string-api";
+        ClientModels clientModels = ClientModelBuilder
+                .build(Index.of(NamespacedClientApi.class));
+        assertNotNull(clientModels.getClientModelByConfigKey(configKey));
+        ClientModel clientModel = clientModels.getClientModelByConfigKey(configKey);
+        assertEquals(2, clientModel.getOperationMap().size());
+        assertOperation(clientModel,
+                new MethodKey("findAllStringsQuery", new Class[0]),
+                "query FirstSecondFindAll { first { second { findAll } } }");
+        assertOperation(clientModel,
+                new MethodKey("update", new Class[] { String.class }),
+                "mutation FirstSecondUpdate($s: String) { first { second { update(s: $s) } } }");
     }
 
     private void assertOperation(ClientModel clientModel, MethodKey methodKey, String expectedQuery) {

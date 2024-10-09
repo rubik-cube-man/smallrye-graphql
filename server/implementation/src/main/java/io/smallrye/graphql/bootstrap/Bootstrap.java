@@ -20,9 +20,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.Stack;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-import jakarta.json.Json;
 import jakarta.json.JsonReader;
 import jakarta.json.JsonReaderFactory;
 import jakarta.json.bind.Jsonb;
@@ -31,6 +29,7 @@ import org.eclipse.microprofile.graphql.Name;
 
 import com.apollographql.federation.graphqljava.Federation;
 
+import graphql.Scalars;
 import graphql.introspection.Introspection.DirectiveLocation;
 import graphql.schema.Coercing;
 import graphql.schema.DataFetcher;
@@ -55,6 +54,7 @@ import graphql.schema.GraphQLUnionType;
 import graphql.schema.TypeResolver;
 import graphql.schema.visibility.BlockedFields;
 import graphql.schema.visibility.GraphqlFieldVisibility;
+import io.smallrye.graphql.JsonProviderHolder;
 import io.smallrye.graphql.SmallRyeGraphQLServerMessages;
 import io.smallrye.graphql.execution.Classes;
 import io.smallrye.graphql.execution.datafetcher.BatchDataFetcher;
@@ -81,8 +81,8 @@ import io.smallrye.graphql.schema.model.DirectiveType;
 import io.smallrye.graphql.schema.model.EnumType;
 import io.smallrye.graphql.schema.model.EnumValue;
 import io.smallrye.graphql.schema.model.Field;
-import io.smallrye.graphql.schema.model.Group;
 import io.smallrye.graphql.schema.model.InputType;
+import io.smallrye.graphql.schema.model.NamespaceContainer;
 import io.smallrye.graphql.schema.model.Operation;
 import io.smallrye.graphql.schema.model.Reference;
 import io.smallrye.graphql.schema.model.ReferenceType;
@@ -155,12 +155,8 @@ public class Bootstrap {
         LookupService lookupService = LookupService.get();
         // This crazy stream operation basically collects all class names where we need to verify that
         // it belongs to an injectable bean
-        Stream.of(
-                schema.getQueries().stream().map(Operation::getClassName),
-                schema.getMutations().stream().map(Operation::getClassName),
-                schema.getGroupedQueries().values().stream().flatMap(Collection::stream).map(Operation::getClassName),
-                schema.getGroupedMutations().values().stream().flatMap(Collection::stream).map(Operation::getClassName))
-                .flatMap(stream -> stream)
+        schema.getAllOperations().stream()
+                .map(Operation::getClassName)
                 .distinct().forEach(beanClassName -> {
                     // verify that the bean is injectable
                     if (!lookupService.isResolvable(classloadingService.loadClass(beanClassName))) {
@@ -185,7 +181,7 @@ public class Bootstrap {
         createGraphQLObjectTypes();
         createGraphQLInputObjectTypes();
 
-        addQueries(schemaBuilder);
+        GraphQLObjectType queryRootType = addQueries(schemaBuilder);
         addMutations(schemaBuilder);
         addSubscriptions(schemaBuilder);
         schemaBuilder.withSchemaAppliedDirectives(Arrays.stream(
@@ -214,15 +210,53 @@ public class Bootstrap {
 
         if (Config.get().isFederationEnabled()) {
             log.enableFederation();
+
+            // Hack: Prevents schema build errors when queries are empty.
+            // Will be overridden during the Federation transformation.
+            addDummySdlQuery(schemaBuilder, queryRootType);
+
+            // Build reference resolvers type, without adding to schema (just for federation)
+            GraphQLObjectType resolversType = buildResolvers();
+
             GraphQLSchema rawSchema = schemaBuilder.build();
             this.graphQLSchema = Federation.transform(rawSchema)
-                    .fetchEntities(new FederationDataFetcher(rawSchema.getQueryType(), rawSchema.getCodeRegistry()))
+                    .fetchEntities(
+                            new FederationDataFetcher(resolversType, rawSchema.getQueryType(), rawSchema.getCodeRegistry()))
                     .resolveEntityType(fetchEntityType())
                     .setFederation2(true)
                     .build();
         } else {
             this.graphQLSchema = schemaBuilder.build();
         }
+    }
+
+    private void addDummySdlQuery(GraphQLSchema.Builder schemaBuilder, GraphQLObjectType queryRootType) {
+        GraphQLObjectType type = GraphQLObjectType.newObject()
+                .name("_Service")
+                .field(GraphQLFieldDefinition
+                        .newFieldDefinition().name("sdl")
+                        .type(new GraphQLNonNull(Scalars.GraphQLString))
+                        .build())
+                .build();
+
+        GraphQLFieldDefinition field = GraphQLFieldDefinition.newFieldDefinition()
+                .name("_service")
+                .type(GraphQLNonNull.nonNull(type))
+                .build();
+
+        GraphQLObjectType.Builder newQueryType = GraphQLObjectType.newObject(queryRootType);
+
+        newQueryType.field(field);
+        schemaBuilder.query(newQueryType.build());
+    }
+
+    private GraphQLObjectType buildResolvers() {
+        GraphQLObjectType.Builder queryBuilder = GraphQLObjectType.newObject()
+                .name("Resolver");
+        if (schema.hasResolvers()) {
+            addRootObject(queryBuilder, schema.getResolvers(), "Resolver");
+        }
+        return queryBuilder.build();
     }
 
     private TypeResolver fetchEntityType() {
@@ -252,11 +286,13 @@ public class Bootstrap {
     private void createGraphQLCustomScalarType(CustomScalarType customScalarType) {
         String scalarName = customScalarType.getName();
 
+        String description = getDescription(customScalarType);
+
         Coercing<?, ?> coercing = getCoercing(customScalarType);
 
         GraphQLScalarType graphQLScalarType = GraphQLScalarType.newScalar()
                 .name(scalarName)
-                .description("Scalar for " + scalarName)
+                .description(description)
                 .coercing(coercing)
                 .build();
 
@@ -264,6 +300,11 @@ public class Bootstrap {
                 scalarName,
                 customScalarType.getClassName(),
                 graphQLScalarType);
+    }
+
+    private static String getDescription(CustomScalarType customScalarType) {
+        return Optional.ofNullable(customScalarType.getDescription())
+                .orElse("Scalar for " + customScalarType.getName());
     }
 
     private static Coercing<?, ?> getCoercing(CustomScalarType customScalarType) {
@@ -319,7 +360,7 @@ public class Bootstrap {
         directiveTypes.add(directiveBuilder.build());
     }
 
-    private void addQueries(GraphQLSchema.Builder schemaBuilder) {
+    private GraphQLObjectType addQueries(GraphQLSchema.Builder schemaBuilder) {
         GraphQLObjectType.Builder queryBuilder = GraphQLObjectType.newObject()
                 .name(QUERY)
                 .description(QUERY_DESCRIPTION);
@@ -327,12 +368,13 @@ public class Bootstrap {
         if (schema.hasQueries()) {
             addRootObject(queryBuilder, schema.getQueries(), QUERY);
         }
-        if (schema.hasGroupedQueries()) {
-            addGroupedRootObject(queryBuilder, schema.getGroupedQueries(), QUERY);
+        if (schema.hasNamespaceQueries()) {
+            addNamespacedRootObject(queryBuilder, schema.getNamespacedQueries(), QUERY);
         }
 
         GraphQLObjectType query = queryBuilder.build();
         schemaBuilder.query(query);
+        return query;
     }
 
     private void addMutations(GraphQLSchema.Builder schemaBuilder) {
@@ -343,8 +385,8 @@ public class Bootstrap {
         if (schema.hasMutations()) {
             addRootObject(mutationBuilder, schema.getMutations(), MUTATION);
         }
-        if (schema.hasGroupedMutations()) {
-            addGroupedRootObject(mutationBuilder, schema.getGroupedMutations(), MUTATION);
+        if (schema.hasNamespaceMutations()) {
+            addNamespacedRootObject(mutationBuilder, schema.getNamespacedMutations(), MUTATION);
         }
 
         GraphQLObjectType mutation = mutationBuilder.build();
@@ -360,9 +402,6 @@ public class Bootstrap {
 
         if (schema.hasSubscriptions()) {
             addRootObject(subscriptionBuilder, schema.getSubscriptions(), SUBSCRIPTION);
-        }
-        if (schema.hasGroupedSubscriptions()) {
-            addGroupedRootObject(subscriptionBuilder, schema.getGroupedSubscriptions(), SUBSCRIPTION);
         }
 
         GraphQLObjectType subscription = subscriptionBuilder.build();
@@ -382,48 +421,86 @@ public class Bootstrap {
         }
     }
 
-    private void addGroupedRootObject(GraphQLObjectType.Builder rootBuilder,
-            Map<Group, Set<Operation>> operationMap, String rootName) {
-        Set<Map.Entry<Group, Set<Operation>>> operationsSet = operationMap.entrySet();
-
-        for (Map.Entry<Group, Set<Operation>> operationsEntry : operationsSet) {
-            Group group = operationsEntry.getKey();
-            Set<Operation> operations = operationsEntry.getValue();
-
-            GraphQLObjectType namedType = createNamedType(rootName, group, operations);
-
-            GraphQLFieldDefinition.Builder graphQLFieldDefinitionBuilder = GraphQLFieldDefinition.newFieldDefinition()
-                    .name(group.getName()).description(group.getDescription());
-
-            graphQLFieldDefinitionBuilder.type(namedType);
-
-            DataFetcher<?> dummyDataFetcher = dfe -> namedType.getName();
-
-            GraphQLFieldDefinition namedField = graphQLFieldDefinitionBuilder.build();
-
-            this.codeRegistryBuilder.dataFetcherIfAbsent(
-                    FieldCoordinates.coordinates(rootName, namedField.getName()),
-                    dummyDataFetcher);
-
-            rootBuilder.field(namedField);
-        }
+    private String makeFirstLetterUppercase(String value) {
+        return value.substring(0, 1).toUpperCase() + value.substring(1);
     }
 
-    private GraphQLObjectType createNamedType(String parent, Group group, Set<Operation> operations) {
-        String namedTypeName = group.getName() + parent;
+    private void addNamespacedRootObject(GraphQLObjectType.Builder rootBuilder,
+            Map<String, NamespaceContainer> namespaceMutations, String mutation) {
+        namespaceMutations.values()
+                .forEach(groupContainer -> addNamespacedRootObject(rootBuilder, groupContainer, "", mutation));
+    }
+
+    private List<GraphQLFieldDefinition> addNamespacedRootObject(GraphQLObjectType.Builder rootBuilder,
+            NamespaceContainer groupContainer, String rootName, String suffix) {
+        List<GraphQLFieldDefinition> graphQLFieldDefinitions = groupContainer.getContainer().isEmpty()
+                ? List.of()
+                : getGraphQLFieldDefinition(groupContainer, rootName, suffix);
+
+        if (groupContainer.getOperations().isEmpty() && graphQLFieldDefinitions.isEmpty()) {
+            return List.of();
+        }
+
+        GraphQLObjectType namedType = createNamespaceType(rootName, suffix, groupContainer,
+                groupContainer.getOperations(), graphQLFieldDefinitions);
+
+        GraphQLFieldDefinition.Builder graphQLFieldDefinitionBuilder = GraphQLFieldDefinition
+                .newFieldDefinition()
+                .name(groupContainer.getName())
+                .description(groupContainer.getDescription());
+
+        graphQLFieldDefinitionBuilder.type(namedType);
+
+        DataFetcher<?> dummyDataFetcher = dfe -> namedType.getName();
+
+        GraphQLFieldDefinition namedField = graphQLFieldDefinitionBuilder.build();
+
+        this.codeRegistryBuilder.dataFetcherIfAbsent(
+                FieldCoordinates.coordinates(rootName + suffix, namedField.getName()),
+                dummyDataFetcher);
+        rootBuilder.field(namedField);
+
+        return List.of(namedField);
+    }
+
+    private List<GraphQLFieldDefinition> getGraphQLFieldDefinition(NamespaceContainer groupContainer, String rootName,
+            String suffix) {
+        String name = makeFirstLetterUppercase(groupContainer.getName());
+        String namedTypeName = rootName + name + suffix;
+
+        GraphQLObjectType.Builder wrapperBuilder = GraphQLObjectType.newObject()
+                .name(namedTypeName)
+                .description(groupContainer.getDescription());
+
+        return groupContainer
+                .getContainer()
+                .values()
+                .stream()
+                .map(namespace -> addNamespacedRootObject(
+                        wrapperBuilder, namespace, rootName + makeFirstLetterUppercase(groupContainer.getName()), suffix))
+                .flatMap(Collection::stream)
+                .collect(Collectors.toList());
+    }
+
+    private GraphQLObjectType createNamespaceType(String root, String suffix, NamespaceContainer namespace,
+            Set<Operation> operations, List<GraphQLFieldDefinition> graphQLFieldDefinitions) {
+        String name = makeFirstLetterUppercase(namespace.getName());
+
+        String namedTypeName = root + name + suffix;
         GraphQLObjectType.Builder objectTypeBuilder = GraphQLObjectType.newObject()
                 .name(namedTypeName)
-                .description(group.getDescription());
+                .description(namespace.getDescription());
 
         // Operations
         for (Operation operation : operations) {
             operation = eventEmitter.fireCreateOperation(operation);
 
-            GraphQLFieldDefinition graphQLFieldDefinition = createGraphQLFieldDefinitionFromOperation(namedTypeName,
-                    operation);
+            GraphQLFieldDefinition graphQLFieldDefinition = createGraphQLFieldDefinitionFromOperation(
+                    namedTypeName, operation);
             objectTypeBuilder = objectTypeBuilder.field(graphQLFieldDefinition);
         }
 
+        objectTypeBuilder.fields(graphQLFieldDefinitions);
         return objectTypeBuilder.build();
     }
 
@@ -985,11 +1062,6 @@ public class Bootstrap {
         }
     }
 
-    private GraphQLInputType referenceGraphQLInputType(Field field) {
-        Reference reference = getCorrectFieldReference(field);
-        return getGraphQLInputType(reference);
-    }
-
     private GraphQLInputType getGraphQLInputType(Reference reference) {
         ReferenceType type = reference.getType();
         String className = reference.getClassName();
@@ -1167,7 +1239,7 @@ public class Bootstrap {
 
     private static final String COMMA = ",";
 
-    private static final JsonReaderFactory jsonReaderFactory = Json.createReaderFactory(null);
+    private static final JsonReaderFactory jsonReaderFactory = JsonProviderHolder.JSON_PROVIDER.createReaderFactory(null);
 
     private static final String CONTEXT = "io.smallrye.graphql.api.Context";
     private static final String OBSERVES = "javax.enterprise.event.Observes";

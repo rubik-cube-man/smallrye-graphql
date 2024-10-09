@@ -3,12 +3,14 @@ package io.smallrye.graphql.client.model.helper;
 import static io.smallrye.graphql.client.model.Annotations.MULTIPLE;
 import static io.smallrye.graphql.client.model.Annotations.MUTATION;
 import static io.smallrye.graphql.client.model.Annotations.NAME;
+import static io.smallrye.graphql.client.model.Annotations.NAMESPACE;
 import static io.smallrye.graphql.client.model.Annotations.QUERY;
 import static io.smallrye.graphql.client.model.Annotations.SUBCRIPTION;
 import static io.smallrye.graphql.client.model.ScanningContext.getIndex;
 import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Stack;
@@ -36,6 +38,8 @@ public class OperationModel implements NamedElement {
     private final Stack<String> expressionStack = new Stack<>();
     private Stack<TypeModel> rawParametrizedTypes = new Stack<>();
     private final List<DirectiveInstance> directives;
+    private final String operationName;
+    private final List<String> namespaces;
 
     /**
      * Creates a new {@code OperationModel} instance based on the provided Jandex {@link MethodInfo}.
@@ -49,6 +53,8 @@ public class OperationModel implements NamedElement {
                 getDirectiveLocation(), AnnotationTarget.Kind.METHOD)
                 .map(DirectiveInstance::of)
                 .collect(toList());
+        this.namespaces = readNamespaces(method);
+        this.operationName = readOperationName(this.namespaces);
     }
 
     /**
@@ -97,6 +103,13 @@ public class OperationModel implements NamedElement {
             String keyFields = fields(type.getMapKeyType());
             String valueFields = fields(type.getMapValueType());
             return " {key" + keyFields + " value" + valueFields + "}";
+        }
+        if (type.isUnion() || type.isInterface()) {
+            return "{__typename " + type.subtypes()
+                    .sorted(Comparator.comparing(TypeModel::getGraphQlTypeName)) // for deterministic order
+                    .map(this::fieldsFragment)
+                    .collect(joining(" ")) +
+                    "}";
         }
         if (isRawParametrizedType(type)) {
             rawParametrizedTypes.push(type.getFirstRawType());
@@ -388,4 +401,47 @@ public class OperationModel implements NamedElement {
     private boolean isRawParametrizedType(TypeModel type) {
         return type.isCustomParametrizedType() && !type.getFirstRawType().isTypeVariable();
     }
+
+    public List<String> getNamespaces() {
+        return namespaces;
+    }
+
+    public String getOperationName() {
+        return operationName;
+    }
+
+    private List<String> readNamespaces(MethodInfo method) {
+        if (method.declaringClass().hasDeclaredAnnotation(NAMESPACE)) {
+            String[] names = method.declaringClass().declaredAnnotation(NAMESPACE).value().asStringArray();
+            if (names.length > 0) {
+                return List.of(names);
+            }
+        } else if (method.declaringClass().hasDeclaredAnnotation(NAME)) {
+            String value = method.declaringClass().declaredAnnotation(NAME).value().asString();
+            if (!value.isEmpty()) {
+                return List.of(value);
+            }
+        }
+        return List.of();
+    }
+
+    private String readOperationName(List<String> names) {
+        if (names.isEmpty()) {
+            return getName();
+        } else {
+            String namespace = names.stream()
+                    .map(this::makeFirstLetterUppercase)
+                    .collect(joining());
+            return namespace + makeFirstLetterUppercase(getName());
+        }
+    }
+
+    private String makeFirstLetterUppercase(String value) {
+        return value.substring(0, 1).toUpperCase() + value.substring(1);
+    }
+
+    private String fieldsFragment(TypeModel type) {
+        return "... on " + type.getGraphQlTypeName() + fields(type);
+    }
+
 }
